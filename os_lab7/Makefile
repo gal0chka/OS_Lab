@@ -1,6 +1,6 @@
 CC      := gcc
-CFLAGS  := -O2 -Wall -Wextra -pedantic
-LDFLAGS := -pthread
+CFLAGS  := -O2 -Wall -Wextra -std=c11
+LDFLAGS :=
 
 TARGETS := sender receiver
 

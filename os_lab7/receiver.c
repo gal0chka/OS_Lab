@@ -1,17 +1,19 @@
-// receiver.c
+#define _XOPEN_SOURCE 700
+
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <semaphore.h>
 #include <time.h>
-#include <errno.h>
+#include <unistd.h>
 
-#define SHM_NAME "/time_shm_example_v1"
-#define SEM_NAME "/time_sem_example_v1"
+#include <sys/ipc.h>
+#include <sys/sem.h>
+#include <sys/shm.h>
+
+#define FTOK_PATH       "."
+#define FTOK_PROJ_SHM   'S'
+#define FTOK_PROJ_SEM   'M'
 
 #define TIME_STR_LEN 64
 
@@ -28,36 +30,53 @@ static void format_now(char *buf, size_t buflen) {
     strftime(buf, buflen, "%Y-%m-%d %H:%M:%S", &tmv);
 }
 
+static int sem_lock(int semid_) {
+    struct sembuf op = {0, -1, SEM_UNDO};
+    return semop(semid_, &op, 1);
+}
+
+static int sem_unlock(int semid_) {
+    struct sembuf op = {0, 1, SEM_UNDO};
+    return semop(semid_, &op, 1);
+}
+
 int main(void) {
-    // Открываем shared memory только если она уже создана sender-ом
-    int shm_fd = shm_open(SHM_NAME, O_RDONLY, 0);
-    if (shm_fd == -1) {
-        fprintf(stderr,
-                "Не удалось открыть shared memory. Возможно, отправитель не запущен.\n");
-        perror("shm_open");
+    key_t shm_key = ftok(FTOK_PATH, FTOK_PROJ_SHM);
+    if (shm_key == (key_t)-1) {
+        perror("ftok(shm)");
         return 1;
     }
 
-    shm_data_t *data = mmap(NULL, sizeof(shm_data_t),
-                            PROT_READ, MAP_SHARED, shm_fd, 0);
-    if (data == MAP_FAILED) {
-        perror("mmap");
-        close(shm_fd);
+    key_t sem_key = ftok(FTOK_PATH, FTOK_PROJ_SEM);
+    if (sem_key == (key_t)-1) {
+        perror("ftok(sem)");
         return 1;
     }
 
-    // Открываем существующий семафор
-    sem_t *sem = sem_open(SEM_NAME, 0);
-    if (sem == SEM_FAILED) {
-        fprintf(stderr,
-                "Не удалось открыть семафор. Возможно, отправитель не запущен.\n");
-        perror("sem_open");
-        munmap(data, sizeof(shm_data_t));
-        close(shm_fd);
+    // Открываем существующий shm (без IPC_CREAT)
+    int shmid = shmget(shm_key, sizeof(shm_data_t), 0666);
+    if (shmid == -1) {
+        fprintf(stderr, "Receiver: shared memory not found. Start sender first.\n");
+        perror("shmget");
         return 1;
     }
 
-    printf("Receiver started. pid=%d\n", getpid());
+    shm_data_t *data = (shm_data_t *)shmat(shmid, NULL, SHM_RDONLY);
+    if (data == (shm_data_t *)-1) {
+        perror("shmat");
+        return 1;
+    }
+
+    // Открываем существующий semaphore set (без IPC_CREAT)
+    int semid = semget(sem_key, 1, 0666);
+    if (semid == -1) {
+        fprintf(stderr, "Receiver: semaphore not found. Start sender first.\n");
+        perror("semget");
+        shmdt(data);
+        return 1;
+    }
+
+    printf("Receiver started. pid=%d shmid=%d semid=%d\n", (int)getpid(), shmid, semid);
 
     while (1) {
         char self_time[TIME_STR_LEN];
@@ -67,8 +86,13 @@ int main(void) {
         long seq;
         char sender_time[TIME_STR_LEN];
 
-        if (sem_wait(sem) == -1) {
-            perror("sem_wait");
+        if (sem_lock(semid) == -1) {
+            // sender мог удалить IPC (IPC_RMID) => выходим красиво
+            if (errno == EIDRM || errno == EINVAL) {
+                fprintf(stderr, "Receiver: semaphore removed (sender stopped). Exiting.\n");
+                break;
+            }
+            perror("semop lock");
             break;
         }
 
@@ -77,20 +101,22 @@ int main(void) {
         strncpy(sender_time, data->time_str, TIME_STR_LEN - 1);
         sender_time[TIME_STR_LEN - 1] = '\0';
 
-        if (sem_post(sem) == -1) {
-            perror("sem_post");
+        if (sem_unlock(semid) == -1) {
+            if (errno == EIDRM || errno == EINVAL) {
+                fprintf(stderr, "Receiver: semaphore removed while unlocking. Exiting.\n");
+                break;
+            }
+            perror("semop unlock");
             break;
         }
 
         printf("Self: pid=%d time=%s | Received: pid=%d time=%s seq=%ld\n",
-               getpid(), self_time, sender_pid, sender_time, seq);
+               (int)getpid(), self_time, (int)sender_pid, sender_time, seq);
         fflush(stdout);
 
         sleep(1);
     }
 
-    sem_close(sem);
-    munmap(data, sizeof(shm_data_t));
-    close(shm_fd);
+    shmdt(data);
     return 0;
 }

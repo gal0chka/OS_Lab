@@ -161,10 +161,22 @@ static int fifo_writer(void) {
 }
 
 static int fifo_reader(void) {
+    // Создаём FIFO, если ещё нет (иначе open() упадёт с ENOENT)
+    if (mkfifo(FIFO_PATH, 0666) < 0) {
+        if (errno != EEXIST) {
+            perror("[reader] mkfifo");
+            return EXIT_FAILURE;
+        }
+    }
+
     printf("[reader] Открываю FIFO '%s' на чтение...\n", FIFO_PATH);
     int fd = open(FIFO_PATH, O_RDONLY);
     if (fd < 0) {
         perror("[reader] open");
+        // если не удалось открыть — всё равно попробуем убрать FIFO (не критично)
+        if (unlink(FIFO_PATH) < 0 && errno != ENOENT) {
+            perror("[reader] unlink");
+        }
         return EXIT_FAILURE;
     }
 
@@ -173,6 +185,9 @@ static int fifo_reader(void) {
     if (n < 0) {
         perror("[reader] read");
         close(fd);
+        if (unlink(FIFO_PATH) < 0 && errno != ENOENT) {
+            perror("[reader] unlink");
+        }
         return EXIT_FAILURE;
     }
     buf[n] = '\0';
@@ -187,8 +202,20 @@ static int fifo_reader(void) {
     printf("[reader] Получено из FIFO: %s\n", buf);
 
     close(fd);
+
+    // Требование лабы: после завершения FIFO должен быть удалён
+    if (unlink(FIFO_PATH) < 0) {
+        if (errno != ENOENT) {
+            perror("[reader] unlink");
+            return EXIT_FAILURE;
+        }
+    } else {
+        printf("[reader] FIFO '%s' удалён (unlink)\n", FIFO_PATH);
+    }
+
     return 0;
 }
+
 
 /* ===== main ===== */
 

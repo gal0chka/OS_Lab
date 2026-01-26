@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <sys/types.h> 
 
 // Совместимая реализация getline для Windows
 static ssize_t portable_getline(char **lineptr, size_t *n, FILE *stream) {
