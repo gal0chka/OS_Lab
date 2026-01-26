@@ -77,18 +77,18 @@ int main(void) {
 
     // Запускаем readers
     for (long i = 0; i < READERS_COUNT; i++) {
-        if (pthread_create(&readers[i], NULL, reader_thread, (void*)i) != 0) {
+        if (pthread_create(&readers[i], NULL, reader_thread, (void *)i) != 0) {
             perror("pthread_create reader");
             return 1;
         }
     }
 
-    // В учебных задачах можно просто join-ить (программа бесконечная)
-    pthread_join(writer, NULL);
-    for (int i = 0; i < READERS_COUNT; i++) {
-        pthread_join(readers[i], NULL);
+    // Программа демонстрационная и работает бесконечно.
+    // join не нужен, destroy тоже не нужен при PTHREAD_MUTEX_INITIALIZER.
+    for (;;) {
+        pause(); // ждать сигналов, процесс живёт
     }
 
-    pthread_mutex_destroy(&mtx);
     return 0;
 }
+
